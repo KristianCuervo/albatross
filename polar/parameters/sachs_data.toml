@@ -1,0 +1,9 @@
+[albatross]
+m = 9.0        # mass [kg]
+S = 0.65       # wing area [m²]
+b = 3.47       # wingspan [m]
+C_D0 = 0.033   # zero-lift drag coefficient
+k = 0.019     # induced drag factor
+LD_max = 20    # maximum lift-to-drag ratio
+cl_max = 1.5   # maximum coefficient of lift
+cl_min = 0.1   # minimum coefficient of lift
