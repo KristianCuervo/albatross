@@ -1,0 +1,13 @@
+casadi
+numpy
+scipy
+matplotlib
+plotly
+xarray
+netcdf4
+
+# For migration and wind map scripts
+cartopy
+
+# For ERA5 download (requires ~/.cdsapirc credentials)
+cdsapi

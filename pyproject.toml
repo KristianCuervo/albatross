@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "albatross"
+version = "0.1.0"
+description = "Wandering albatross dynamic soaring & migration modelling"
+requires-python = ">=3.11"
+dependencies = [
+    "casadi",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "plotly",
+    "xarray",
+    "netcdf4",
+]
+
+[project.optional-dependencies]
+maps = ["cartopy"]
+era5 = ["cdsapi"]
+dev  = ["jupyter", "ipykernel"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["albatross*"]
