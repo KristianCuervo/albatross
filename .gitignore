@@ -14,17 +14,17 @@ build/
 .eggs/
 
 # Data — ERA5 NetCDF files are large and re-downloadable
-data/era5/*.nc
+**/era5/*.nc
 
 # Large re-generatable NPZ files (>5 MB)
-data/macroscale/migration_isocurves_bird_dec2022_3d.npz
-data/macroscale/hamiltonian_isocurves_bird_dec2022_3d.npz
-data/macroscale/hamiltonian_jan2023_snippet.npz
+**/data/macroscale/migration_isocurves_bird_dec2022_3d.npz
+**/data/macroscale/hamiltonian_isocurves_bird_dec2022_3d.npz
+**/data/macroscale/hamiltonian_jan2023_snippet.npz
 
 # Large GIFs (30-day and 90-day runs, re-generatable)
-figures/macroscale/greedy_migration_30d.gif
-figures/macroscale/greedy_migration_90d.gif
-figures/macroscale/hamiltonian_migration_30d.gif
+**/figures/macroscale/greedy_migration_30d.gif
+**/figures/macroscale/greedy_migration_90d.gif
+**/figures/macroscale/hamiltonian_migration_30d.gif
 
 # IDE / editor
 .vscode/
