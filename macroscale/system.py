@@ -35,6 +35,17 @@ class System:
         if self._last_theta is not None and len(candidates) > 1:
             deltas = np.abs(((thetas[candidates] - self._last_theta + np.pi) % (2 * np.pi)) - np.pi)
             idx_best = int(candidates[int(np.argmin(deltas))])
+        elif self._last_theta is None and len(candidates) > 1:
+            # No previous heading to anchor to: pick the candidate whose geographic
+            # velocity direction is closest to the co-state direction.
+            lam_angle = np.arctan2(state.lam[1], state.lam[0])
+            v_geo_angles = np.array([
+                np.arctan2((_rotation(alpha) @ self.hull.velocity(w_mag, float(thetas[c])))[1],
+                           (_rotation(alpha) @ self.hull.velocity(w_mag, float(thetas[c])))[0])
+                for c in candidates
+            ])
+            angle_diffs = np.abs(((v_geo_angles - lam_angle + np.pi) % (2 * np.pi)) - np.pi)
+            idx_best = int(candidates[int(np.argmin(angle_diffs))])
         else:
             idx_best = int(np.argmax(h_vals))
         theta_star = float(thetas[idx_best])
@@ -68,9 +79,9 @@ def test_hamiltonian():
     """
     from hull import TestHull
     hull = TestHull()
-    wind = Downwind(w=np.array([0.0, -13.427651]), decay=1e-6)
+    wind = Downwind(w=np.array([0.0, -14.0]), decay=1e-6)
     system = System(hull, wind)
-    state = State(x=np.array([0., 0.]), lam=np.array([0.0, 1.0]), t=0.0)
+    state = State(x=np.array([0., 0.]), lam=np.array([0.0, -1.0]), t=0.0)
     control = system.optimal_control(state)
     dx = system.dx_dt(control)
     dlam, diagnostic = system.dlam_dt(state, control)
