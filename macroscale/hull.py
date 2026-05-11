@@ -169,8 +169,17 @@ class SmoothHull:
             else:
                 theta_forbidden[i] = a_u[0]
                 row = PchipInterpolator(a_u, s_u, extrapolate=False)(angles)
-                row[angles < a_u[0]] = s_u[0]
-                row[angles > a_u[-1]] = s_u[-1]
+                # Zero fill (not boundary-speed fill) in the forbidden zone.
+                # Hull uses boundary-speed fill to keep bilinear V_ref interpolation
+                # from artificially dipping toward 0, but for the cubic spline that
+                # strategy contaminates the valid region: the spline sees non-zero
+                # "phantom" speeds at V_ref=9-12 then the real tacking speed at
+                # V_ref=13+, and the cubic basis propagates that mismatch into the
+                # valid region. Zero is the physically correct signal; _in_valid_domain
+                # gates these values anyway, so the spline only needs to be told that
+                # nothing is achievable here.
+                row[angles < a_u[0]] = 0.0
+                row[angles > a_u[-1]] = 0.0
 
             speed_grid[i] = np.nan_to_num(row, nan=0.0).clip(0)
 
@@ -388,7 +397,7 @@ def test_velocity_vs_vref(
     from matplotlib.colors import Normalize
     from matplotlib.cm import ScalarMappable
 
-    h = Hull()
+    h = SmoothHull()
     cases = [(0.0, 'upwind'), (180.0, 'downwind')]
     vrefs_fine = np.linspace(h._vrefs.min(), h._vrefs.max(), 300)
 
@@ -448,7 +457,7 @@ def test_spline_field(
     from matplotlib.colors import Normalize
     from matplotlib.cm import ScalarMappable
 
-    h = Hull()
+    h = SmoothHull()
     vrefs_fine = np.arange(h._vrefs.min(), h._vrefs.max() + step, step)
     cmap = plt.cm.plasma
     norm = Normalize(vmin=h._vrefs.min(), vmax=h._vrefs.max())
@@ -480,8 +489,8 @@ def test_spline_field(
 
 
 if __name__ == "__main__":
-    make_mirrored()
-    plot_mirrored()
+    #make_mirrored()
+    #plot_mirrored()
     #test_construct_arc()
-    #test_velocity_vs_vref()
+    test_velocity_vs_vref()
     test_spline_field()
