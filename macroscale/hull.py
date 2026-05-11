@@ -1,6 +1,6 @@
 import numpy as np
 from pathlib import Path
-from scipy.interpolate import PchipInterpolator, RegularGridInterpolator
+from scipy.interpolate import PchipInterpolator, RegularGridInterpolator, RectBivariateSpline
 from utils import _alpha, _rotation
 DATA = Path(__file__).parents[1] / 'mesoscale' / 'data'
 
@@ -108,6 +108,119 @@ class Hull:
                    else np.linspace(th_f, 2 * np.pi - th_f, n))
         pts    = np.column_stack([np.full(n, v_ref), angles])
         speeds = self._interp(pts).clip(0)
+        return angles, speeds * np.sin(angles), speeds * np.cos(angles)
+
+    def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
+        def geo_vel(w_):
+            w_mag = np.linalg.norm(w_)
+            alpha = _alpha(w_)
+            v_alpha = self.velocity(v_ref=w_mag, angle=theta)
+            v_geo = _rotation(alpha) @ v_alpha
+            return v_geo[0], v_geo[1]
+
+        vxp0, vyp0 = geo_vel(w + np.array([dw, 0.0]))
+        vxm0, vym0 = geo_vel(w - np.array([dw, 0.0]))
+        vxp1, vyp1 = geo_vel(w + np.array([0.0, dw]))
+        vxm1, vym1 = geo_vel(w - np.array([0.0, dw]))
+
+        return np.array([
+            [(vxp0 - vxm0) / (2*dw), (vxp1 - vxm1) / (2*dw)],
+            [(vyp0 - vym0) / (2*dw), (vyp1 - vym1) / (2*dw)],
+        ])
+
+
+class SmoothHull:
+    """
+    C² tensor-product cubic spline replacement for Hull.
+
+    Uses the same PCHIP-resampled speed_grid as Hull but replaces the bilinear
+    RegularGridInterpolator with RectBivariateSpline(kx=3, ky=3), giving C²
+    continuity in both V_ref and angle throughout the interior of the valid
+    domain.  A 3-column periodic guard band is prepended/appended to the angle
+    axis so the spline wraps smoothly at 0/2π.
+
+    Public interface is identical to Hull: velocity(), construct_arc(),
+    gradient(), _in_valid_domain().
+    """
+
+    def __init__(self):
+        d = np.load(DATA / 'tacking_mirrored.npz')
+        vrefs  = np.unique(d['V_ref'])
+        angles = np.linspace(0, 2 * np.pi, _N_ANGLES, endpoint=False)
+
+        speed_grid      = np.zeros((len(vrefs), _N_ANGLES))
+        theta_forbidden = np.zeros(len(vrefs))
+
+        for i, vr in enumerate(vrefs):
+            mask = d['V_ref'] == vr
+            a = d['angle'][mask]
+            s = d['speed'][mask]
+            idx = np.argsort(a)
+            a_s, s_s = a[idx], s[idx]
+            a_u, inv = np.unique(a_s, return_inverse=True)
+            s_u = np.bincount(inv, weights=s_s) / np.bincount(inv)
+
+            gap = a_u[0] + (2 * np.pi - a_u[-1])
+            if gap < 2:
+                theta_forbidden[i] = 0.0
+                a_ext = np.concatenate([[a_u[-1] - 2*np.pi], a_u, [a_u[0] + 2*np.pi]])
+                s_ext = np.concatenate([[s_u[-1]], s_u, [s_u[0]]])
+                row = PchipInterpolator(a_ext, s_ext)(angles)
+            else:
+                theta_forbidden[i] = a_u[0]
+                row = PchipInterpolator(a_u, s_u, extrapolate=False)(angles)
+                row[angles < a_u[0]] = s_u[0]
+                row[angles > a_u[-1]] = s_u[-1]
+
+            speed_grid[i] = np.nan_to_num(row, nan=0.0).clip(0)
+
+        self._vrefs           = vrefs
+        self._angles          = angles
+        self._theta_forbidden = theta_forbidden
+        self._u               = d['u_avg']
+        self._v               = d['v_avg']
+
+        # 3-column periodic guard band so the cubic spline wraps smoothly at 0/2π.
+        # A degree-3 basis has support over 4 consecutive knots; 3 guard columns on
+        # each side ensure all valid-domain queries interpolate rather than extrapolate.
+        _K = 3
+        angles_ext = np.concatenate([
+            angles[-_K:] - 2 * np.pi,
+            angles,
+            angles[:_K]  + 2 * np.pi,
+        ])
+        speed_grid_ext = np.hstack([
+            speed_grid[:, -_K:],
+            speed_grid,
+            speed_grid[:, :_K],
+        ])
+        self._interp = RectBivariateSpline(
+            vrefs, angles_ext, speed_grid_ext, kx=3, ky=3, s=0,
+        )
+
+    def _in_valid_domain(self, v_ref: float, angle: float) -> bool:
+        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        th_f    = float(np.interp(v_ref_c, self._vrefs, self._theta_forbidden))
+        if th_f <= 0.0:
+            return True
+        angle_n = float(angle) % (2 * np.pi)
+        return th_f <= angle_n <= 2 * np.pi - th_f
+
+    def velocity(self, v_ref: float, angle: float) -> np.ndarray:
+        angle = float(angle) % (2 * np.pi)
+        if not self._in_valid_domain(v_ref, angle):
+            return np.array([0.0, 0.0])
+        speed = max(0.0, float(self._interp.ev(v_ref, angle)))
+        return np.array([speed * np.sin(angle), speed * np.cos(angle)])
+
+    def construct_arc(self, v_ref: float, n: int = 360) -> tuple:
+        """Return (angles, u, v) for the iso-curve at v_ref."""
+        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        th_f    = float(np.interp(v_ref_c, self._vrefs, self._theta_forbidden))
+        angles  = (np.linspace(0, 2 * np.pi, n, endpoint=False)
+                   if th_f <= 0.0
+                   else np.linspace(th_f, 2 * np.pi - th_f, n))
+        speeds  = self._interp.ev(np.full(n, v_ref), angles).clip(0)
         return angles, speeds * np.sin(angles), speeds * np.cos(angles)
 
     def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
