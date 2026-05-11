@@ -133,11 +133,15 @@ class SmoothHull:
     """
     C² tensor-product cubic spline replacement for Hull.
 
-    Uses the same PCHIP-resampled speed_grid as Hull but replaces the bilinear
-    RegularGridInterpolator with RectBivariateSpline(kx=3, ky=3), giving C²
-    continuity in both V_ref and angle throughout the interior of the valid
-    domain.  A 3-column periodic guard band is prepended/appended to the angle
-    axis so the spline wraps smoothly at 0/2π.
+    Interpolates the u and v wind-frame velocity components directly in
+    Cartesian space using two RectBivariateSpline(kx=3, ky=3) surfaces, one
+    for u and one for v.  Interpolating in (u, v) rather than in (angle, speed)
+    eliminates the coordinate-system mismatch that causes bumps on the flat
+    tacking lines: the v-component of the tacking line is constant in Cartesian
+    space, so the cubic spline through constant data is identically constant.
+
+    A 3-column periodic guard band on the angle axis ensures smooth wrap at
+    0/2π.  The forbidden-zone cosine taper applies to both u and v components.
 
     Public interface is identical to Hull: velocity(), construct_arc(),
     gradient(), _in_valid_domain().
@@ -148,48 +152,57 @@ class SmoothHull:
         vrefs  = np.unique(d['V_ref'])
         angles = np.linspace(0, 2 * np.pi, _N_ANGLES, endpoint=False)
 
-        speed_grid      = np.zeros((len(vrefs), _N_ANGLES))
+        u_grid          = np.zeros((len(vrefs), _N_ANGLES))
+        v_grid          = np.zeros((len(vrefs), _N_ANGLES))
         theta_forbidden = np.zeros(len(vrefs))
 
         for i, vr in enumerate(vrefs):
             mask = d['V_ref'] == vr
-            a = d['angle'][mask]
-            s = d['speed'][mask]
-            idx = np.argsort(a)
-            a_s, s_s = a[idx], s[idx]
+            a     = d['angle'][mask]
+            u_raw = d['u_avg'][mask]
+            v_raw = d['v_avg'][mask]
+            s_raw = d['speed'][mask]
+            idx   = np.argsort(a)
+            a_s, u_s, v_s, s_s = a[idx], u_raw[idx], v_raw[idx], s_raw[idx]
             a_u, inv = np.unique(a_s, return_inverse=True)
-            s_u = np.bincount(inv, weights=s_s) / np.bincount(inv)
+            cnt  = np.bincount(inv)
+            u_u  = np.bincount(inv, weights=u_s) / cnt
+            v_u  = np.bincount(inv, weights=v_s) / cnt
+            s_u  = np.bincount(inv, weights=s_s) / cnt   # for taper boundary values
 
             gap = a_u[0] + (2 * np.pi - a_u[-1])
             if gap < 2:
+                # Small gap straddles 0/2π — wrap one point from each end so
+                # PCHIP interpolates smoothly across the periodic boundary.
                 theta_forbidden[i] = 0.0
                 a_ext = np.concatenate([[a_u[-1] - 2*np.pi], a_u, [a_u[0] + 2*np.pi]])
-                s_ext = np.concatenate([[s_u[-1]], s_u, [s_u[0]]])
-                row = PchipInterpolator(a_ext, s_ext)(angles)
+                row_u = PchipInterpolator(
+                    a_ext, np.concatenate([[u_u[-1]], u_u, [u_u[0]]]))(angles)
+                row_v = PchipInterpolator(
+                    a_ext, np.concatenate([[v_u[-1]], v_u, [v_u[0]]]))(angles)
             else:
+                # Real forbidden zone near angle=0.  PCHIP with extrapolate=False
+                # gives NaN outside [a_u[0], a_u[-1]]; fill with cosine taper so
+                # the spline surface is continuous at the arc-tip boundary while
+                # correctly reaching 0 at angle=0 (no phantom upwind speed).
                 theta_forbidden[i] = a_u[0]
-                row = PchipInterpolator(a_u, s_u, extrapolate=False)(angles)
-                # Cosine taper in the forbidden zone: smoothly from the arc-tip
-                # speed at the boundary down to 0 at angle=0 (and at angle=2π by
-                # symmetry).  This solves two competing constraints:
-                #   - Flat boundary-speed fill (like Hull) keeps arcs smooth in the
-                #     angle direction but puts phantom non-zero speed at angle=0 for
-                #     forbidden V_ref levels, which distorts the V_ref spline at the
-                #     transition where tacking becomes possible (~V_ref=13).
-                #   - Zero fill fixes that but creates a step at the arc boundary,
-                #     causing Gibbs-like oscillation in the valid arc region.
-                # The cosine taper is continuous at the boundary (value = s_u[0])
-                # and reaches exactly 0 at angle=0, so both constraints are met.
+                row_u = PchipInterpolator(a_u, u_u, extrapolate=False)(angles)
+                row_v = PchipInterpolator(a_u, v_u, extrapolate=False)(angles)
                 fl = angles < a_u[0]
                 if np.any(fl):
-                    t = angles[fl] / a_u[0]          # 0 at angle=0, 1 at boundary
-                    row[fl] = s_u[0] * 0.5 * (1 - np.cos(np.pi * t))
+                    t     = angles[fl] / a_u[0]   # 0 at angle=0, 1 at boundary
+                    taper = 0.5 * (1 - np.cos(np.pi * t))
+                    row_u[fl] = u_u[0]  * taper
+                    row_v[fl] = v_u[0]  * taper
                 fr = angles > a_u[-1]
                 if np.any(fr):
-                    t = (2*np.pi - angles[fr]) / (2*np.pi - a_u[-1])
-                    row[fr] = s_u[-1] * 0.5 * (1 - np.cos(np.pi * t))
+                    t     = (2*np.pi - angles[fr]) / (2*np.pi - a_u[-1])
+                    taper = 0.5 * (1 - np.cos(np.pi * t))
+                    row_u[fr] = u_u[-1] * taper
+                    row_v[fr] = v_u[-1] * taper
 
-            speed_grid[i] = np.nan_to_num(row, nan=0.0).clip(0)
+            u_grid[i] = np.nan_to_num(row_u, nan=0.0)
+            v_grid[i] = np.nan_to_num(row_v, nan=0.0)
 
         self._vrefs           = vrefs
         self._angles          = angles
@@ -197,23 +210,18 @@ class SmoothHull:
         self._u               = d['u_avg']
         self._v               = d['v_avg']
 
-        # 3-column periodic guard band so the cubic spline wraps smoothly at 0/2π.
-        # A degree-3 basis has support over 4 consecutive knots; 3 guard columns on
-        # each side ensure all valid-domain queries interpolate rather than extrapolate.
+        # 3-column periodic guard band (degree-3 spline needs 3 neighbours on
+        # each side to interpolate rather than extrapolate near the wrap point).
         _K = 3
         angles_ext = np.concatenate([
             angles[-_K:] - 2 * np.pi,
             angles,
             angles[:_K]  + 2 * np.pi,
         ])
-        speed_grid_ext = np.hstack([
-            speed_grid[:, -_K:],
-            speed_grid,
-            speed_grid[:, :_K],
-        ])
-        self._interp = RectBivariateSpline(
-            vrefs, angles_ext, speed_grid_ext, kx=3, ky=3, s=0,
-        )
+        u_grid_ext = np.hstack([u_grid[:, -_K:], u_grid, u_grid[:, :_K]])
+        v_grid_ext = np.hstack([v_grid[:, -_K:], v_grid, v_grid[:, :_K]])
+        self._u_interp = RectBivariateSpline(vrefs, angles_ext, u_grid_ext, kx=3, ky=3, s=0)
+        self._v_interp = RectBivariateSpline(vrefs, angles_ext, v_grid_ext, kx=3, ky=3, s=0)
 
     def _in_valid_domain(self, v_ref: float, angle: float) -> bool:
         v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
@@ -225,15 +233,14 @@ class SmoothHull:
 
     def velocity(self, v_ref: float, angle: float) -> np.ndarray:
         angle = float(angle) % (2 * np.pi)
-        # RectBivariateSpline extrapolates outside the knot range; guard explicitly
-        # so out-of-range wind speeds return zero just as RegularGridInterpolator
-        # did via fill_value=0.0.
         if v_ref < self._vrefs[0] or v_ref > self._vrefs[-1]:
             return np.array([0.0, 0.0])
         if not self._in_valid_domain(v_ref, angle):
             return np.array([0.0, 0.0])
-        speed = max(0.0, float(self._interp.ev(v_ref, angle)))
-        return np.array([speed * np.sin(angle), speed * np.cos(angle)])
+        return np.array([
+            float(self._u_interp.ev(v_ref, angle)),
+            float(self._v_interp.ev(v_ref, angle)),
+        ])
 
     def construct_arc(self, v_ref: float, n: int = 360) -> tuple:
         """Return (angles, u, v) for the iso-curve at v_ref."""
@@ -242,8 +249,8 @@ class SmoothHull:
         angles  = (np.linspace(0, 2 * np.pi, n, endpoint=False)
                    if th_f <= 0.0
                    else np.linspace(th_f, 2 * np.pi - th_f, n))
-        speeds  = self._interp.ev(np.full(n, v_ref_c), angles).clip(0)
-        return angles, speeds * np.sin(angles), speeds * np.cos(angles)
+        vr_arr  = np.full(n, v_ref_c)
+        return angles, self._u_interp.ev(vr_arr, angles), self._v_interp.ev(vr_arr, angles)
 
     def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
         def geo_vel(w_):
