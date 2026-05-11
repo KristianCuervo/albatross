@@ -169,17 +169,25 @@ class SmoothHull:
             else:
                 theta_forbidden[i] = a_u[0]
                 row = PchipInterpolator(a_u, s_u, extrapolate=False)(angles)
-                # Zero fill (not boundary-speed fill) in the forbidden zone.
-                # Hull uses boundary-speed fill to keep bilinear V_ref interpolation
-                # from artificially dipping toward 0, but for the cubic spline that
-                # strategy contaminates the valid region: the spline sees non-zero
-                # "phantom" speeds at V_ref=9-12 then the real tacking speed at
-                # V_ref=13+, and the cubic basis propagates that mismatch into the
-                # valid region. Zero is the physically correct signal; _in_valid_domain
-                # gates these values anyway, so the spline only needs to be told that
-                # nothing is achievable here.
-                row[angles < a_u[0]] = 0.0
-                row[angles > a_u[-1]] = 0.0
+                # Cosine taper in the forbidden zone: smoothly from the arc-tip
+                # speed at the boundary down to 0 at angle=0 (and at angle=2π by
+                # symmetry).  This solves two competing constraints:
+                #   - Flat boundary-speed fill (like Hull) keeps arcs smooth in the
+                #     angle direction but puts phantom non-zero speed at angle=0 for
+                #     forbidden V_ref levels, which distorts the V_ref spline at the
+                #     transition where tacking becomes possible (~V_ref=13).
+                #   - Zero fill fixes that but creates a step at the arc boundary,
+                #     causing Gibbs-like oscillation in the valid arc region.
+                # The cosine taper is continuous at the boundary (value = s_u[0])
+                # and reaches exactly 0 at angle=0, so both constraints are met.
+                fl = angles < a_u[0]
+                if np.any(fl):
+                    t = angles[fl] / a_u[0]          # 0 at angle=0, 1 at boundary
+                    row[fl] = s_u[0] * 0.5 * (1 - np.cos(np.pi * t))
+                fr = angles > a_u[-1]
+                if np.any(fr):
+                    t = (2*np.pi - angles[fr]) / (2*np.pi - a_u[-1])
+                    row[fr] = s_u[-1] * 0.5 * (1 - np.cos(np.pi * t))
 
             speed_grid[i] = np.nan_to_num(row, nan=0.0).clip(0)
 
