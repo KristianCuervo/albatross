@@ -225,6 +225,11 @@ class SmoothHull:
 
     def velocity(self, v_ref: float, angle: float) -> np.ndarray:
         angle = float(angle) % (2 * np.pi)
+        # RectBivariateSpline extrapolates outside the knot range; guard explicitly
+        # so out-of-range wind speeds return zero just as RegularGridInterpolator
+        # did via fill_value=0.0.
+        if v_ref < self._vrefs[0] or v_ref > self._vrefs[-1]:
+            return np.array([0.0, 0.0])
         if not self._in_valid_domain(v_ref, angle):
             return np.array([0.0, 0.0])
         speed = max(0.0, float(self._interp.ev(v_ref, angle)))
@@ -237,7 +242,7 @@ class SmoothHull:
         angles  = (np.linspace(0, 2 * np.pi, n, endpoint=False)
                    if th_f <= 0.0
                    else np.linspace(th_f, 2 * np.pi - th_f, n))
-        speeds  = self._interp.ev(np.full(n, v_ref), angles).clip(0)
+        speeds  = self._interp.ev(np.full(n, v_ref_c), angles).clip(0)
         return angles, speeds * np.sin(angles), speeds * np.cos(angles)
 
     def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
