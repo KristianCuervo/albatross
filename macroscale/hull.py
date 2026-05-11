@@ -385,11 +385,10 @@ class TestHull:
         if v_ref < self._vrefs[0] or v_ref > self._vrefs[-1]:
             return np.array([0.0, 0.0])
 
-        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
-        a_t     = float(np.interp(v_ref_c, self._vrefs, self._a_top))
-        v_tack  = float(np.interp(v_ref_c, self._vrefs, self._v_top))
-        a_b     = float(np.interp(v_ref_c, self._vrefs, self._a_bot))
-        v_down  = float(np.interp(v_ref_c, self._vrefs, self._v_bot))
+        v_ref_c   = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        a_t       = float(np.interp(v_ref_c, self._vrefs, self._a_top))
+        v_top_raw = float(np.interp(v_ref_c, self._vrefs, self._v_top))
+        a_b       = float(np.interp(v_ref_c, self._vrefs, self._a_bot))
 
         # Fold to [0, π]; flip tracks the u-sign for the left half
         if angle > np.pi:
@@ -398,14 +397,17 @@ class TestHull:
             a_fold, flip = angle, 1.0
 
         if a_fold <= a_t:
-            # Upwind sector: binary decision — full tacking line or fully forbidden
-            if v_tack <= 0.0:
+            # Upwind sector: binary decision uses raw data (exact physical threshold).
+            if v_top_raw <= 0.0:
                 return np.array([0.0, 0.0])
+            # Flat-line height taken from the SPLINE at the arc tip so the tacking
+            # line starts at exactly the value the spline gives at a_t — no step.
+            v_tack = float(self._v_interp.ev(v_ref_c, a_t))
             return np.array([flip * v_tack * np.tan(a_fold), v_tack])
 
         if a_fold >= a_b:
-            # Downwind sector: always tack at v_bot level
-            # v_down < 0; tan(a_fold near π) is small negative → u small positive
+            # Downwind sector: same continuity fix — use spline value at a_b.
+            v_down = float(self._v_interp.ev(v_ref_c, a_b))
             return np.array([flip * v_down * np.tan(a_fold), v_down])
 
         # Valid arc: spline
@@ -588,7 +590,7 @@ def test_velocity_vs_vref(
     from matplotlib.colors import Normalize
     from matplotlib.cm import ScalarMappable
 
-    h = SmoothHull()
+    h = TestHull()
     cases = [(0.0, 'upwind'), (180.0, 'downwind')]
     vrefs_fine = np.linspace(h._vrefs.min(), h._vrefs.max(), 300)
 
@@ -648,7 +650,7 @@ def test_spline_field(
     from matplotlib.colors import Normalize
     from matplotlib.cm import ScalarMappable
 
-    h = SmoothHull()
+    h = TestHull()
     vrefs_fine = np.arange(h._vrefs.min(), h._vrefs.max() + step, step)
     cmap = plt.cm.plasma
     norm = Normalize(vmin=h._vrefs.min(), vmax=h._vrefs.max())
