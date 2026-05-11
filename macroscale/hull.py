@@ -271,6 +271,177 @@ class SmoothHull:
         ])
 
 
+class TestHull:
+    """
+    Experimental hull that cleanly separates the spline from the tacking lines.
+
+    Pipeline:
+      1. Fit two C² RectBivariateSplines (u and v) on the *original one-sided
+         arc data* from tacking_diagram.npz — no tacking line rows injected.
+      2. Mirror analytically (u → −u at 2π−θ) to obtain the full [0, 2π) grid.
+      3. Apply tacking lines as exact analytical overrides in velocity():
+           • Upwind flat line  (angle near 0): only if v at the arc tip > 0.
+             Below that threshold the upwind sector is fully forbidden — no
+             partial or half-length tacking lines.
+           • Downwind flat line (angle near π): always applied (gap is small,
+             v_min always < 0).
+
+    Public interface identical to Hull/SmoothHull.
+    """
+
+    def __init__(self):
+        d     = np.load(DATA / 'tacking_diagram.npz')
+        vrefs = np.unique(d['V_ref'])
+
+        N_HALF   = _N_ANGLES // 2 + 1                            # 361
+        angles_h = np.linspace(0, np.pi, N_HALF, endpoint=True)  # [0 … π]
+
+        u_grid_h = np.zeros((len(vrefs), N_HALF))
+        v_grid_h = np.zeros((len(vrefs), N_HALF))
+        a_top    = np.zeros(len(vrefs))   # upwind arc-tip angle
+        v_top    = np.zeros(len(vrefs))   # v at upwind tip (>0 → tacking possible)
+        a_bot    = np.zeros(len(vrefs))   # downwind arc-tip angle
+        v_bot    = np.zeros(len(vrefs))   # v at downwind tip (always <0)
+
+        for i, vr in enumerate(vrefs):
+            mask  = d['V_ref'] == vr
+            a_raw = d['angle'][mask]
+            u_raw = d['u_avg'][mask]
+            v_raw = d['v_avg'][mask]
+            idx   = np.argsort(a_raw)
+            a_s, u_s, v_s = a_raw[idx], u_raw[idx], v_raw[idx]
+            a_u, inv = np.unique(a_s, return_inverse=True)
+            cnt  = np.bincount(inv)
+            u_u  = np.bincount(inv, weights=u_s) / cnt
+            v_u  = np.bincount(inv, weights=v_s) / cnt
+
+            a_top[i], v_top[i] = a_u[0],  v_u[0]   # upwind arc tip
+            a_bot[i], v_bot[i] = a_u[-1], v_u[-1]  # downwind arc tip
+
+            # Valid arc: PCHIP interpolation of u and v
+            row_u = PchipInterpolator(a_u, u_u, extrapolate=False)(angles_h)
+            row_v = PchipInterpolator(a_u, v_u, extrapolate=False)(angles_h)
+
+            # Upwind forbidden zone [0, a_u[0]]: cosine taper → (0, 0)
+            fl = angles_h < a_u[0]
+            if np.any(fl):
+                t = angles_h[fl] / a_u[0]
+                taper = 0.5 * (1 - np.cos(np.pi * t))
+                row_u[fl] = u_u[0]  * taper
+                row_v[fl] = v_u[0]  * taper
+
+            # Downwind forbidden zone [a_u[-1], π]: cosine taper → (0, 0)
+            fr = angles_h > a_u[-1]
+            if np.any(fr):
+                t = (np.pi - angles_h[fr]) / (np.pi - a_u[-1])
+                taper = 0.5 * (1 - np.cos(np.pi * t))
+                row_u[fr] = u_u[-1] * taper
+                row_v[fr] = v_u[-1] * taper
+
+            u_grid_h[i] = np.nan_to_num(row_u, nan=0.0)
+            v_grid_h[i] = np.nan_to_num(row_v, nan=0.0)
+
+        # Mirror analytically to full [0, 2π) with 720 evenly-spaced points.
+        # Indices [-2:0:-1] go from N_HALF-2 down to 1, giving N_HALF-2 = 359
+        # mirrored points for (π, 2π).  Total = 361 + 359 = 720. ✓
+        angles_full = np.concatenate([
+            angles_h,
+            2 * np.pi - angles_h[-2:0:-1],
+        ])
+        u_grid_full = np.hstack([u_grid_h,  -u_grid_h[:, -2:0:-1]])  # u antisymmetric
+        v_grid_full = np.hstack([v_grid_h,   v_grid_h[:, -2:0:-1]])  # v symmetric
+
+        # 3-column periodic guard band for smooth spline wrap at 0/2π
+        _K = 3
+        angles_ext = np.concatenate([
+            angles_full[-_K:] - 2 * np.pi,
+            angles_full,
+            angles_full[:_K]  + 2 * np.pi,
+        ])
+        u_ext = np.hstack([u_grid_full[:, -_K:], u_grid_full, u_grid_full[:, :_K]])
+        v_ext = np.hstack([v_grid_full[:, -_K:], v_grid_full, v_grid_full[:, :_K]])
+
+        self._vrefs  = vrefs
+        self._a_top  = a_top
+        self._v_top  = v_top
+        self._a_bot  = a_bot
+        self._v_bot  = v_bot
+        self._u      = d['u_avg']   # raw data for plot helpers
+        self._v      = d['v_avg']
+        self._u_interp = RectBivariateSpline(vrefs, angles_ext, u_ext, kx=3, ky=3, s=0)
+        self._v_interp = RectBivariateSpline(vrefs, angles_ext, v_ext, kx=3, ky=3, s=0)
+
+    def _in_valid_domain(self, v_ref: float, angle: float) -> bool:
+        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        a_t     = float(np.interp(v_ref_c, self._vrefs, self._a_top))
+        v_t     = float(np.interp(v_ref_c, self._vrefs, self._v_top))
+        angle_n = float(angle) % (2 * np.pi)
+        if v_t > 0:
+            return True                             # full circle valid
+        return a_t <= angle_n <= 2 * np.pi - a_t  # arc + downwind tacking only
+
+    def velocity(self, v_ref: float, angle: float) -> np.ndarray:
+        angle = float(angle) % (2 * np.pi)
+        if v_ref < self._vrefs[0] or v_ref > self._vrefs[-1]:
+            return np.array([0.0, 0.0])
+
+        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        a_t     = float(np.interp(v_ref_c, self._vrefs, self._a_top))
+        v_tack  = float(np.interp(v_ref_c, self._vrefs, self._v_top))
+        a_b     = float(np.interp(v_ref_c, self._vrefs, self._a_bot))
+        v_down  = float(np.interp(v_ref_c, self._vrefs, self._v_bot))
+
+        # Fold to [0, π]; flip tracks the u-sign for the left half
+        if angle > np.pi:
+            a_fold, flip = 2 * np.pi - angle, -1.0
+        else:
+            a_fold, flip = angle, 1.0
+
+        if a_fold <= a_t:
+            # Upwind sector: binary decision — full tacking line or fully forbidden
+            if v_tack <= 0.0:
+                return np.array([0.0, 0.0])
+            return np.array([flip * v_tack * np.tan(a_fold), v_tack])
+
+        if a_fold >= a_b:
+            # Downwind sector: always tack at v_bot level
+            # v_down < 0; tan(a_fold near π) is small negative → u small positive
+            return np.array([flip * v_down * np.tan(a_fold), v_down])
+
+        # Valid arc: spline
+        return np.array([
+            float(self._u_interp.ev(v_ref, angle)),
+            float(self._v_interp.ev(v_ref, angle)),
+        ])
+
+    def construct_arc(self, v_ref: float, n: int = 360) -> tuple:
+        """Return (angles, u, v) for the iso-curve at v_ref."""
+        v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
+        a_t     = float(np.interp(v_ref_c, self._vrefs, self._a_top))
+        v_t     = float(np.interp(v_ref_c, self._vrefs, self._v_top))
+        start   = 0.0 if v_t > 0 else a_t
+        angles  = np.linspace(start, 2 * np.pi - start, n, endpoint=False)
+        vels    = np.array([self.velocity(v_ref, a) for a in angles])
+        return angles, vels[:, 0], vels[:, 1]
+
+    def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
+        def geo_vel(w_):
+            w_mag  = np.linalg.norm(w_)
+            alpha  = _alpha(w_)
+            v_alpha = self.velocity(v_ref=w_mag, angle=theta)
+            v_geo  = _rotation(alpha) @ v_alpha
+            return v_geo[0], v_geo[1]
+
+        vxp0, vyp0 = geo_vel(w + np.array([dw, 0.0]))
+        vxm0, vym0 = geo_vel(w - np.array([dw, 0.0]))
+        vxp1, vyp1 = geo_vel(w + np.array([0.0, dw]))
+        vxm1, vym1 = geo_vel(w - np.array([0.0, dw]))
+        return np.array([
+            [(vxp0 - vxm0) / (2*dw), (vxp1 - vxm1) / (2*dw)],
+            [(vyp0 - vym0) / (2*dw), (vyp1 - vym1) / (2*dw)],
+        ])
+
+
 def _tacking_line(u_tip: float, v_const: float, n: int = 20):
     # Symmetric half-linspace ensures u=0 is always included, giving the true
     # directly-upwind speed (v_const) as an explicit data point rather than
