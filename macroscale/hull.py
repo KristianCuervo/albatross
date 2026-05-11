@@ -364,12 +364,20 @@ class TestHull:
         self._vrefs  = vrefs
         self._a_top  = a_top
         self._v_top  = v_top
-        self._a_bot  = a_bot
-        self._v_bot  = v_bot
         self._u      = d['u_avg']   # raw data for plot helpers
         self._v      = d['v_avg']
         self._u_interp = RectBivariateSpline(vrefs, angles_ext, u_ext, kx=3, ky=3, s=0)
         self._v_interp = RectBivariateSpline(vrefs, angles_ext, v_ext, kx=3, ky=3, s=0)
+
+        # Refine a_bot to the true spline minimum near the downwind arc tip.
+        # The cubic spline can overshoot slightly below the data arc tip, so
+        # the effective tacking boundary is the spline minimum, not a_u[-1].
+        for i, vr in enumerate(vrefs):
+            search   = np.linspace(max(0.0, a_bot[i] - 0.10), a_bot[i], 200)
+            v_search = self._v_interp.ev(np.full(len(search), vr), search)
+            a_bot[i] = float(search[np.argmin(v_search)])
+        self._a_bot = a_bot
+        self._v_bot = v_bot
 
     def _in_valid_domain(self, v_ref: float, angle: float) -> bool:
         v_ref_c = float(np.clip(v_ref, self._vrefs[0], self._vrefs[-1]))
