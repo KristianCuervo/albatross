@@ -396,7 +396,7 @@ class TestHull:
         else:
             a_fold, flip = angle, 1.0
 
-        if a_fold <= a_t:
+        if a_fold < a_t:
             # Upwind sector: binary decision uses raw data (exact physical threshold).
             if v_top_raw <= 0.0:
                 return np.array([0.0, 0.0])
@@ -405,7 +405,7 @@ class TestHull:
             v_tack = float(self._v_interp.ev(v_ref_c, a_t))
             return np.array([flip * v_tack * np.tan(a_fold), v_tack])
 
-        if a_fold >= a_b:
+        if a_fold > a_b:
             # Downwind sector: same continuity fix — use spline value at a_b.
             v_down = float(self._v_interp.ev(v_ref_c, a_b))
             return np.array([flip * v_down * np.tan(a_fold), v_down])
