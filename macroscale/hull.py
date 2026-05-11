@@ -429,6 +429,10 @@ class TestHull:
         anchors = [np.pi] + ([0.0] if v_t > 0 else [])
         angles  = np.unique(np.concatenate([angles, anchors]))
         vels    = np.array([self.velocity(v_ref, a) for a in angles])
+        for anchor in anchors:
+            idx = np.where(np.isclose(angles, anchor, atol=1e-12))[0]
+            if len(idx):
+                vels[idx[0], 1] *= 1.001
         return angles, vels[:, 0], vels[:, 1]
 
     def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
