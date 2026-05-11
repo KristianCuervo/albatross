@@ -645,7 +645,7 @@ def test_spline_field(
     output: Path = Path(__file__).parents[1] / 'figures' / 'mesoscale' / 'spline_field.png',
     step: float = 0.1,
 ) -> None:
-    """Polar visualisation of the interpolated iso-curves at fine V_ref steps."""
+    """Cartesian (u, v) visualisation of the interpolated iso-curves at fine V_ref steps."""
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.cm import ScalarMappable
@@ -655,27 +655,29 @@ def test_spline_field(
     cmap = plt.cm.plasma
     norm = Normalize(vmin=h._vrefs.min(), vmax=h._vrefs.max())
 
-    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(9, 9))
-    ax.set_theta_zero_location('N')
-    ax.set_theta_direction(-1)
+    fig, ax = plt.subplots(figsize=(9, 9))
 
     for vr in vrefs_fine:
-        angles, us, vs = h.construct_arc(vr)
-        speed = np.sqrt(us**2 + vs**2)
+        _, us, vs = h.construct_arc(vr)
         lw = 1.8 if abs(vr - round(vr)) < 1e-9 else 0.6
-        ax.plot(angles, speed, color=cmap(norm(vr)), lw=lw, alpha=0.85)
+        ax.plot(us, vs, color=cmap(norm(vr)), lw=lw, alpha=0.85)
 
-    r_max = float(np.sqrt(h._u**2 + h._v**2).max())
-    ax.annotate('', xy=(0, r_max * 0.65), xytext=(0, r_max * 0.9),
+    v_max = float(np.sqrt(h._u**2 + h._v**2).max())
+    ax.annotate('', xy=(0, v_max * 0.75), xytext=(0, v_max * 0.95),
                 arrowprops=dict(arrowstyle='->', color='black', lw=2, mutation_scale=20))
-    ax.text(0, r_max * 0.97, 'Wind', ha='center', va='bottom',
+    ax.text(0, v_max * 0.98, 'Wind', ha='center', va='bottom',
             fontsize=11, fontweight='bold')
-    ax.set_thetagrids(range(0, 360, 30), labels=[''] * 12)
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlabel('$u$ — crosswind [m/s]')
+    ax.set_ylabel('$v$ — upwind [m/s]')
     ax.set_title(f'Interpolated iso-curves (step={step} m/s)', pad=14)
+    ax.grid(True, alpha=0.3)
+    ax.axhline(0, color='k', lw=0.5, alpha=0.4)
+    ax.axvline(0, color='k', lw=0.5, alpha=0.4)
 
     sm = ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    fig.colorbar(sm, ax=ax, label='$V_{ref}$ [m/s]', pad=0.12, shrink=0.75)
+    fig.colorbar(sm, ax=ax, label='$V_{ref}$ [m/s]', shrink=0.75)
 
     plt.tight_layout()
     plt.show()
