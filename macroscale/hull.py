@@ -432,7 +432,7 @@ class TestHull:
         for anchor in anchors:
             idx = np.where(np.isclose(angles, anchor, atol=1e-12))[0]
             if len(idx):
-                vels[idx[0], 1] *= 1.001
+                vels[idx[0], 1] *= 1.01
         return angles, vels[:, 0], vels[:, 1]
 
     def gradient(self, w: np.ndarray, theta: float, dw: float = 0.01) -> np.ndarray:
