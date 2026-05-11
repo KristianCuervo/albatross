@@ -423,6 +423,11 @@ class TestHull:
         v_t     = float(np.interp(v_ref_c, self._vrefs, self._v_top))
         start   = 0.0 if v_t > 0 else a_t
         angles  = np.linspace(start, 2 * np.pi - start, n, endpoint=False)
+        # Guarantee exact u=0 anchor points regardless of n parity:
+        #   angle=pi  → downwind centre (always present)
+        #   angle=0   → upwind centre   (only when upwind tacking is active)
+        anchors = [np.pi] + ([0.0] if v_t > 0 else [])
+        angles  = np.unique(np.concatenate([angles, anchors]))
         vels    = np.array([self.velocity(v_ref, a) for a in angles])
         return angles, vels[:, 0], vels[:, 1]
 
