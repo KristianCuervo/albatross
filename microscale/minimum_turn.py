@@ -1,17 +1,20 @@
 """
-Sachs Analysis: 8.6 m/s Minimum Dynamic Soaring Wind Speed
+Minimum Turn: minimum wind speed for a half-cycle with u(0) = -u(T_cycle).
 
-Reproduces the key result from:
-    Sachs, G. (2005). Minimum shear wind strength required for dynamic soaring.
-    Journal of Ornithology, 146(1), 74-84.
+Finds the minimum V_ref to sustain a periodic half-cycle where the crosswind
+velocity component reverses sign at the boundary:
 
-The solver finds the minimum wind speed (V_ref) needed to sustain a periodic
-dynamic soaring cycle for the reference wandering albatross parameters.
+    u[N-1] = -u[0]   (crosswind reflects — tacking half-cycle)
+    v[N-1] =  v[0]   (upwind speed preserved)
+    h[N-1] =  h[0]   (altitude preserved)
+    w[N-1] =  w[0]   (vertical velocity preserved)
 
-RECOMPUTE = False (default): load precomputed result from data/microscale/sachs_result.npz
+Tiling two such half-cycles (mirrored in u) gives a full periodic tacking orbit.
+
+RECOMPUTE = False (default): load precomputed result from data/minimum_turn_result.npz
 RECOMPUTE = True : run the optimisation live (~30-60 s on a modern laptop)
 
-Output figures are saved to figures/microscale/.
+Output figures are saved to figures/.
 """
 
 import sys
@@ -26,7 +29,7 @@ from microscale import Solver, Container
 
 RECOMPUTE   = True
 _HERE       = Path(__file__).parent
-NPZ_PATH    = _HERE / 'data' / 'sachs_result.npz'
+NPZ_PATH    = _HERE / 'data' / 'minimum_turn_result.npz'
 FIGURES_DIR = _HERE / 'figures'
 
 # ── Bird parameters ───────────────────────────────────────────────────────────
@@ -35,7 +38,7 @@ print(bird)
 
 # ── Solve or load ─────────────────────────────────────────────────────────────
 if RECOMPUTE or not NPZ_PATH.exists():
-    print('Running min_vref optimisation ...')
+    print('Running min_vref optimisation with reflective u BC ...')
     sol = Solver(
         bird    = bird,
         theta   = 0.0,
@@ -44,9 +47,10 @@ if RECOMPUTE or not NPZ_PATH.exists():
         add_progress_constraint = False,
         h_min        = 0.5,
         T_cycle_min  = 5.0,
-        T_cycle_max  = 15.0
+        T_cycle_max  = 15.0,
+        reflective_bc = True,
     ).optimise()
-    print(f'V_ref = {sol.V_ref:.3f} m/s  (expected ~8.6 m/s)')
+    print(f'V_ref = {sol.V_ref:.3f} m/s')
 
     NPZ_PATH.parent.mkdir(exist_ok=True)
     np.savez_compressed(
@@ -67,12 +71,13 @@ else:
     })
 
 print(f'\nResult: V_ref = {sol.V_ref:.3f} m/s  |  T_cycle = {sol.T_cycle:.2f} s')
+print(f'Boundary check: u[0] = {sol.u[0]:.3f}  u[-1] = {sol.u[-1]:.3f}  (should be negated)')
 
 x, y, h = sol.x, sol.y, sol.h
 print(f'\nTrajectory extents:')
-print(f'  x : {x.min():+.2f} -> {x.max():+.2f}  (range {x.max()-x.min():.2f} m,  start {x[0]:.2f} m)')
-print(f'  y : {y.min():+.2f} -> {y.max():+.2f}  (range {y.max()-y.min():.2f} m,  start {y[0]:.2f} m)')
-print(f'  h : {h.min():+.2f} -> {h.max():+.2f}  (range {h.max()-h.min():.2f} m,  start {h[0]:.2f} m)')
+print(f'  x : {x.min():+.2f} -> {x.max():+.2f}  (range {x.max()-x.min():.2f} m)')
+print(f'  y : {y.min():+.2f} -> {y.max():+.2f}  (range {y.max()-y.min():.2f} m)')
+print(f'  h : {h.min():+.2f} -> {h.max():+.2f}  (range {h.max()-h.min():.2f} m)')
 
 # ── Time-series plots ─────────────────────────────────────────────────────────
 t_norm = np.arange(sol.N) * sol.dt / sol.T_cycle
@@ -81,7 +86,7 @@ V_wy = sol.V_ref * (sol.h / 10.0) ** 0.143
 V_a  = np.sqrt(sol.u**2 + (sol.v + V_wy)**2 + sol.w**2)
 V_K  = np.sqrt(sol.u**2 + sol.v**2 + sol.w**2)
 
-xlabel = '$t \\,/\\, T_{\\mathrm{cyc}}$'
+xlabel = '$t \\,/\\, T_{\\mathrm{half}}$'
 
 fig, ax = plt.subplots(figsize=(6, 4))
 ax.plot(t_norm, sol.h, 'C0')
@@ -89,9 +94,9 @@ ax.set_xlabel(xlabel)
 ax.set_ylabel('$h$  [m]')
 ax.grid(alpha=0.3)
 fig.tight_layout()
-fig.savefig(FIGURES_DIR / 'altitude.png', dpi=150)
+fig.savefig(FIGURES_DIR / 'min_turn_altitude.png', dpi=150)
 plt.close(fig)
-print('Saved altitude.png')
+print('Saved min_turn_altitude.png')
 
 fig, ax = plt.subplots(figsize=(6, 4))
 ax.plot(t_norm, V_a, 'C1',   label='airspeed $V_a$')
@@ -101,29 +106,41 @@ ax.set_ylabel('speed  [m/s]')
 ax.legend(frameon=False)
 ax.grid(alpha=0.3)
 fig.tight_layout()
-fig.savefig(FIGURES_DIR / 'speeds.png', dpi=150)
+fig.savefig(FIGURES_DIR / 'min_turn_speeds.png', dpi=150)
 plt.close(fig)
-print('Saved speeds.png')
+print('Saved min_turn_speeds.png')
 
 fig, ax = plt.subplots(figsize=(6, 4))
-ax.plot(t_norm, sol.cl, 'C3')
+ax.plot(t_norm, sol.u, 'C3')
+ax.axhline(0, color='k', lw=0.7, ls='--')
+ax.set_xlabel(xlabel)
+ax.set_ylabel('$u$  [m/s]')
+ax.set_title(f'u[0]={sol.u[0]:.2f}  →  u[-1]={sol.u[-1]:.2f} m/s')
+ax.grid(alpha=0.3)
+fig.tight_layout()
+fig.savefig(FIGURES_DIR / 'min_turn_u.png', dpi=150)
+plt.close(fig)
+print('Saved min_turn_u.png')
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.plot(t_norm, sol.cl, 'C4')
 ax.set_xlabel(xlabel)
 ax.set_ylabel('$C_L$')
 ax.grid(alpha=0.3)
 fig.tight_layout()
-fig.savefig(FIGURES_DIR / 'lift_coefficient.png', dpi=150)
+fig.savefig(FIGURES_DIR / 'min_turn_lift_coefficient.png', dpi=150)
 plt.close(fig)
-print('Saved lift_coefficient.png')
+print('Saved min_turn_lift_coefficient.png')
 
 fig, ax = plt.subplots(figsize=(6, 4))
-ax.plot(t_norm, np.degrees(sol.mu), 'C4')
+ax.plot(t_norm, np.degrees(sol.mu), 'C5')
 ax.set_xlabel(xlabel)
 ax.set_ylabel('$\\mu$  [°]')
 ax.grid(alpha=0.3)
 fig.tight_layout()
-fig.savefig(FIGURES_DIR / 'bank_angle.png', dpi=150)
+fig.savefig(FIGURES_DIR / 'min_turn_bank_angle.png', dpi=150)
 plt.close(fig)
-print('Saved bank_angle.png')
+print('Saved min_turn_bank_angle.png')
 
 # ── 3-D trajectory ────────────────────────────────────────────────────────────
 from mpl_toolkits.mplot3d import Axes3D
@@ -187,15 +204,12 @@ def add_bird_crosses(ax, sol, span, n_birds=5):
         ax.scatter(*pos, s=12, color='k', zorder=11)
 
 
-def add_flight_arrows(ax, sol, span, n_arrows=6, two_color=True):
+def add_flight_arrows(ax, sol, span, n_arrows=6):
     aw = span * 0.028
     x, y, h = sol.x, sol.y, sol.h
-    N    = len(x)
-    half = N // 2
-
+    N = len(x)
     idxs = np.linspace(0, N - 1, n_arrows + 2, dtype=int)[1:-1]
     for i in idxs:
-        color = ('C0' if i < half else 'C1') if two_color else 'C0'
         fwd = np.array([sol.u[i], sol.v[i], -sol.w[i]], dtype=float)
         if np.linalg.norm(fwd) < 1e-10:
             continue
@@ -205,7 +219,7 @@ def add_flight_arrows(ax, sol, span, n_arrows=6, two_color=True):
             up = np.array([0., 1., 0.])
         width = np.cross(fwd, up); width /= np.linalg.norm(width)
         tip = np.array([x[i], y[i], h[i]])
-        flat_arrow_3d(ax, tip, tuple(fwd), tuple(width), aw, color=color, alpha=0.95)
+        flat_arrow_3d(ax, tip, tuple(fwd), tuple(width), aw, color='C0', alpha=0.95)
 
 
 def add_wind_shear_profile(ax, sol, span, xl, yl):
@@ -225,7 +239,6 @@ def add_wind_shear_profile(ax, sol, span, xl, yl):
     y_curve = y_spine - (V_w / V_top) * profile_w
 
     aw = profile_w * 0.05
-
     n_arrows = 7
     h_arrows = np.linspace(h_max / (n_arrows + 1), h_max, n_arrows)
     for h_a in h_arrows:
@@ -277,10 +290,8 @@ def add_dimension_arrows(ax, sol, span, xl, yl):
             f'{h_hi:.1f} m [h]', ha='left', va='center', **tlkw)
 
 
-def plot_trajectory_3d_windshear(sol, two_color=False, n_birds=5):
+def plot_trajectory_3d(sol, n_birds=5):
     x, y, h = sol.x, sol.y, sol.h
-    N    = len(x)
-    half = N // 2
 
     fig = plt.figure(figsize=(13, 12))
     ax  = fig.add_subplot(111, projection='3d')
@@ -297,14 +308,8 @@ def plot_trajectory_3d_windshear(sol, two_color=False, n_birds=5):
     ax.set_box_aspect([1, 1, 1])
 
     add_curtain(ax, sol)
-
-    if two_color:
-        ax.plot(x[:half+1], y[:half+1], h[:half+1], lw=2, color='C0', zorder=5)
-        ax.plot(x[half:],   y[half:],   h[half:],   lw=2, color='C1', zorder=5)
-    else:
-        ax.plot(x, y, h, lw=2, color='C0', zorder=5)
-
-    add_flight_arrows(ax, sol, span, two_color=two_color)
+    ax.plot(x, y, h, lw=2, color='C0', zorder=5)
+    add_flight_arrows(ax, sol, span)
 
     pkw = dict(lw=0.8, color='black', alpha=0.6)
     ax.plot(x, y,                         np.zeros_like(h),  **pkw)
@@ -328,16 +333,16 @@ def plot_trajectory_3d_windshear(sol, two_color=False, n_birds=5):
         pane.fill = False
         pane.set_edgecolor('lightgray')
 
-    ax.set_title(f'Dynamic soaring orbit — $V_{{ref}}$ = {sol.V_ref:.2f} m/s  |  '
-                 f'$T_{{cycle}}$ = {sol.T_cycle:.2f} s')
+    ax.set_title(f'Minimum turn half-cycle — $V_{{ref}}$ = {sol.V_ref:.2f} m/s  |  '
+                 f'$T_{{half}}$ = {sol.T_cycle:.2f} s')
     plt.tight_layout()
     return fig, ax
 
 
-fig, ax = plot_trajectory_3d_windshear(sol, two_color=False, n_birds=N_BIRDS)
-fig.savefig(FIGURES_DIR / 'trajectory_3d.png', dpi=150)
+fig, ax = plot_trajectory_3d(sol, n_birds=N_BIRDS)
+fig.savefig(FIGURES_DIR / 'min_turn_trajectory_3d.png', dpi=150)
 plt.close(fig)
-print('Saved trajectory_3d.png')
+print('Saved min_turn_trajectory_3d.png')
 
 # ── 2-D projections ───────────────────────────────────────────────────────────
 s    = 0.18
@@ -346,26 +351,18 @@ fs   = 12
 lpad = 4
 
 
-def _draw_arrow_2d(ax, cx, cy, L, direction, color, label, label_side='top'):
+def _draw_arrow_2d(ax, cx, cy, L, direction, color, label):
     akw = dict(arrowstyle='->', color=color, lw=1.5, mutation_scale=12)
     if direction == 'down':
         ax.annotate('', xy=(cx, cy - L / 2), xytext=(cx, cy + L / 2), arrowprops=akw)
-        if label:
-            lbl_xy = (cx, cy + L / 2) if label_side == 'top' else (cx, cy - L / 2)
-            va = 'bottom' if label_side == 'top' else 'top'
-            ax.text(lbl_xy[0], lbl_xy[1], label, ha='center', va=va, fontsize=9, color=color)
     elif direction == 'left':
         ax.annotate('', xy=(cx - L / 2, cy), xytext=(cx + L / 2, cy), arrowprops=akw)
-        if label:
-            ax.text(cx - L / 2, cy, label, ha='right', va='center', fontsize=9, color=color)
     elif direction == 'in':
         r = L * 0.2
         ax.add_patch(plt.Circle((cx, cy), r, fill=False, color=color, lw=1.2))
         d = r / np.sqrt(2)
         ax.plot([cx - d, cx + d], [cy - d, cy + d], '-', color=color, lw=1.2)
         ax.plot([cx - d, cx + d], [cy + d, cy - d], '-', color=color, lw=1.2)
-        if label:
-            ax.text(cx, cy + r * 1.8, label, ha='center', va='bottom', fontsize=9, color=color)
 
 
 def make_proj(a, b, a_name, b_name, title, wind_dir, save_name):
@@ -375,17 +372,13 @@ def make_proj(a, b, a_name, b_name, title, wind_dir, save_name):
     ax.plot(a, b, 'k', lw=1)
     ax.set_aspect('equal')
     ax.set_title(title, pad=4, fontsize=fs)
-
     ax.set_xlim(a.min(), a.max())
     ax.set_ylim(b.min(), b.max())
     ax.set_xticks([]); ax.set_yticks([])
-
     cx = (ax.get_xlim()[0] + ax.get_xlim()[1]) / 2
     cy = (ax.get_ylim()[0] + ax.get_ylim()[1]) / 2
     L  = 0.15 * min(a_r, b_r)
-
     _draw_arrow_2d(ax, cx, cy, L, wind_dir, 'red', '')
-
     ax.set_xlabel(f'{a_r:.1f} m [{a_name}]', fontsize=fs, labelpad=lpad)
     ax.set_ylabel(f'{b_r:.1f} m [{b_name}]', fontsize=fs, labelpad=lpad)
     fig.tight_layout(pad=0.3)
@@ -394,8 +387,8 @@ def make_proj(a, b, a_name, b_name, title, wind_dir, save_name):
     print(f'Saved {save_name}')
 
 
-make_proj(x, y, 'x', 'y', 'x-y plane',  wind_dir='down', save_name='projection_xy.png')
-make_proj(x, h, 'x', 'h', 'x-h plane',  wind_dir='in',   save_name='projection_xh.png')
-make_proj(y, h, 'y', 'h', 'y-h plane',  wind_dir='left', save_name='projection_yh.png')
+make_proj(x, y, 'x', 'y', 'x-y plane',  wind_dir='down', save_name='min_turn_projection_xy.png')
+make_proj(x, h, 'x', 'h', 'x-h plane',  wind_dir='in',   save_name='min_turn_projection_xh.png')
+make_proj(y, h, 'y', 'h', 'y-h plane',  wind_dir='left', save_name='min_turn_projection_yh.png')
 
 print(f'\nAll figures saved to {FIGURES_DIR.resolve()}')

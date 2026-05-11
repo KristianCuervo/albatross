@@ -499,8 +499,8 @@ class Solver:
             'N':           self.N,
             'obj':         float(sol.value(self.obj)),
             'T_cycle':      float(sol.value(self.T_cycle)),
-            'scheme':       self.scheme,
-            'mode':         self.mode,
+            'scheme':        self.scheme,
+            'mode':          self.mode,
             'reflective_bc': self.reflective_bc,
         }
 

@@ -10,34 +10,47 @@ The analysis is organised across three scales:
 
 ## Repository layout
 
+Each scale is a self-contained directory with its own library modules, analysis scripts, precomputed data, and output figures.
+
 ```
-albatross/          Installable Python package
-  microscale/       CasADi solver, result container, ensemble, batch factory
-  macroscale/       ERA5 interpolator, velocity hull, greedy migration, Hamiltonian IVP
+microscale/
+  bird.py               Albatross dataclass, loads from albatross.toml
+  solver.py             CasADi Opti solver (max_vmg / min_vref modes)
+  container.py          Single-run result container
+  ensemble.py           Collection of containers + plotting
+  factory.py            Batch sweep + parallel execution
+  sachs_analysis.py     Reproduces 8.6 m/s Sachs (2005) result
+  convergence_study.py  Grid-resolution convergence check
+  coordinate_frames.py  Interactive coordinate convention diagrams
+  wind_shear.py         Wind shear profile visualisation
+  albatross.toml        Bird parameters (Sachs 2005)
+  data/                 sachs_result.npz
+  figures/              Time-series, 3-D trajectory, projection plots
 
-scripts/
-  microscale/       sachs_analysis.py      — reproduces 8.6 m/s Sachs (2005) result
-                    coordinate_frames.py   — interactive coordinate convention diagrams
-  mesoscale/        tacking_diagram.py     — VMG polar sweep + trajectory comparisons
-  macroscale/       run_migration.py       — compute greedy + Hamiltonian IVP
-                    wind_explorer.py       — interactive ERA5 wind viewer
-                    visualise_greedy.py    — interactive greedy trajectory viewer
-                    visualise_ham.py       — interactive Hamiltonian trajectory viewer
-                    costate_analysis.py    — grouped costate magnitude analysis
-                    seasonal_wind_maps.py  — seasonal-mean wind maps (DJF/MAM/JJA/SON)
-                    download_era5.py       — CDS API downloader for ERA5 NetCDF files
+mesoscale/
+  velocity_hull.py      Convex velocity hull (micro → macro bridge)
+  tacking_diagram.py    VMG polar sweep + trajectory comparisons
+  vref_min_polar.py     Minimum wind speed polar diagram
+  symmetry_breaking.py  Symmetry-breaking trajectory analysis
+  data/                 tacking_diagram.npz, velocity_hulls.npz, tacking_mirrored.npz
+  figures/              Polar diagrams, tacking diagram, trajectory comparisons
 
-data/
-  albatross.toml    Bird parameters (Sachs 2005)
-  microscale/       sachs_result.npz
-  mesoscale/        velocity_hulls.npz, tacking_diagram.npz
-  macroscale/       migration and Hamiltonian IVP results (various windows)
-  era5/             ERA5 NetCDF files — not tracked, download with download_era5.py
-
-figures/
-  microscale/       Time-series, 3-D trajectory, projection plots
-  mesoscale/        Polar diagrams, tacking diagram, trajectory comparisons
-  macroscale/       Migration isocurves, GIFs, seasonal wind maps
+macroscale/
+  wind.py               Wind base class (uniform shear model)
+  realWind.py           ERA5Interpolator + RealWind (spatiotemporal ERA5 wind)
+  hull.py               Velocity hull interface for the migration system
+  system.py             Hamiltonian system (costate ODE)
+  integrator.py         Leapfrog integrator
+  shooter.py            Trajectory fan shooter
+  derivative.py         Numerical derivative utilities
+  utils.py              Coordinate and unit utilities
+  storage.py            Trajectory storage / serialisation
+  visualise.py          Trajectory and wind field visualisation
+  download_era5.py      CDS API downloader for ERA5 NetCDF files
+  seasonal_wind_maps.py Seasonal-mean wind maps (DJF/MAM/JJA/SON)
+  wind_explorer.py      Interactive ERA5 wind viewer
+  data/era5/            ERA5 NetCDF files — not tracked, ~3 GB
+  figures/              Migration isocurves, GIFs, seasonal wind maps
 ```
 
 ## Installation
@@ -46,38 +59,49 @@ figures/
 git clone https://github.com/KristianCuervo/albatross.git
 cd albatross
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[maps,era5]"
+pip install -r requirements.txt
 ```
 
-`maps` adds Cartopy (needed for migration and wind map scripts).  
-`era5` adds cdsapi (needed for `download_era5.py`; requires `~/.cdsapirc` credentials).
+For Cartopy (needed for macroscale map scripts):
+```bash
+pip install cartopy
+```
+
+For ERA5 downloading:
+```bash
+pip install cdsapi   # also requires ~/.cdsapirc credentials
+```
 
 ## Usage
 
 **Microscale — reproduce Sachs (2005) minimum wind speed:**
 ```bash
-python scripts/microscale/sachs_analysis.py
+python microscale/sachs_analysis.py
 ```
 
 **Mesoscale — tacking diagram and trajectory comparisons:**
 ```bash
-python scripts/mesoscale/tacking_diagram.py
+python mesoscale/tacking_diagram.py
 ```
 
-**Macroscale — compute and explore migration:**
+**Macroscale — download ERA5 data and explore wind:**
 ```bash
-# Download ERA5 wind data first
-python scripts/macroscale/download_era5.py
-
-# Run migration simulation
-python scripts/macroscale/run_migration.py
-
-# Explore results interactively
-python scripts/macroscale/visualise_greedy.py
-python scripts/macroscale/visualise_ham.py
+python macroscale/download_era5.py   # downloads to macroscale/data/era5/
+python macroscale/wind_explorer.py   # interactive ERA5 wind viewer
 ```
 
-All scripts default to `RECOMPUTE = False` and load precomputed results from `data/`.
+All analysis scripts default to `RECOMPUTE = False` and load precomputed results from their local `data/` directory.
+
+## ERA5 data
+
+ERA5 files are not tracked in git. Two datasets are used:
+
+| Dataset | Pattern | Resolution | Coverage |
+|---|---|---|---|
+| Southern Ocean 1-hourly | `era5_1h_so_YYYY_MM_DD.nc` | 0.25° × 1 h | Dec 2022 – Feb 2023 |
+| Global 6-hourly | `era5_6h_global_YYYY_MM.nc` | 1.0° × 6 h | Dec 2022 – Nov 2023 |
+
+Download both with `macroscale/download_era5.py` (requires a CDS API key).
 
 ## Reference
 

@@ -124,24 +124,25 @@ def test_boundaries():
 
 def test_shooting():
     import sys; sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
-    from macroscale.hull import Hull
+    from hull import Hull, SmoothHull
     from wind import Waterfall, Downwind, Vortex, Rotation
     from visualise import Visualiser
     hull = Hull()
     #wind = Waterfall(v0=20., strip_half_width=100e3, decay=1e-6)
-    wind = Downwind(w=np.array([-20.0, 0.0]), decay=1e-6)
+    wind = Downwind(w=np.array([0.0, -20.0]), decay=1e-6)
     #wind = Vortex(center=np.array([10e4, 10e4]), V_max=20., R_max=1e5, alpha=1.0, beta=0.0, U_inf=0.)
     #wind = Vortex(center=np.array([-9e5, 0.0]), V_max=20., R_max=1e6, alpha=1.0, beta=0.0, center_velocity=np.array([8.0, 0.0]))
     # Need to add dynamic visualisation of the wind fields
     #wind = Rotation(center=np.array([0, -50e4]), strength=20, radius=1e6)
     system = System(hull, wind)
     integrator = Euler()
-    shooter = Shooter(system=system, integrator=integrator, x0=np.array([0., 0.]), dt=400.0, T = 36 * 1 * 3600.0)
+    shooter = Shooter(system=system, integrator=integrator, x0=np.array([0., 0.]), dt=100.0, T = 24 * 1 * 3600.0)
     trajectories = shooter.shoot(n=12)
     vis = Visualiser(trajectories=trajectories, wind=wind)
     anim = vis.animate(interval=5, repeat=False)
+    #iso = vis.isochrone(n_steps=12, background=True)
     plt.show()
-
+    
 if __name__ == '__main__':
     #test_boundaries()
     test_shooting()

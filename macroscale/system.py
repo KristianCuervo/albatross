@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from macroscale.hull import Hull
+from macroscale.hull import Hull, SmoothHull
 from wind import Downwind, Wind
 from storage import State, Control, Diagnostic, Record
 from utils import _alpha, _rotation
@@ -66,8 +66,9 @@ def test_hamiltonian():
     """
     Test a single step of optimal control
     """
-    hull = Hull()
-    wind = Downwind(v0=15, decay=1e-6)
+    from hull import TestHull
+    hull = TestHull()
+    wind = Downwind(w=np.array([0.0, -13.427651]), decay=1e-6)
     system = System(hull, wind)
     state = State(x=np.array([0., 0.]), lam=np.array([0.0, 1.0]), t=0.0)
     control = system.optimal_control(state)
@@ -77,7 +78,6 @@ def test_hamiltonian():
     print("Optimal velocity (m/s):", control.v)
     print("State derivative dx/dt:", dx)
     print("Co-state derivative dlam/dt:", dlam)
-    print(system.hull.velocity(v_ref=wind.v0, angle=0.0))
 
     w = wind.velocity(state.x)
     w_mag = np.linalg.norm(w)

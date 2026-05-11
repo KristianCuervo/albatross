@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.colors import Normalize
+from scipy.spatial import ConvexHull, QhullError
+from scipy.interpolate import splprep, splev
 
 
 class Visualiser:
@@ -136,3 +138,103 @@ class Visualiser:
             interval=interval, blit=True, repeat=repeat,
         )
         return anim
+
+    def _smooth_closed_curve(self, pts: np.ndarray, n: int = 240, smooth: float = 0.0) -> np.ndarray:
+        if len(pts) < 4:
+            return pts
+        x, y = pts[:, 0], pts[:, 1]
+        try:
+            tck, _ = splprep([x, y], s=smooth, per=True)
+            un = np.linspace(0, 1, n)
+            xn, yn = splev(un, tck)
+            return np.column_stack([xn, yn])
+        except Exception:
+            return pts
+
+    def _sample_frames(self, nframes: int, n_steps: int) -> np.ndarray:
+        if nframes <= 1 or n_steps <= 1:
+            return np.array([0], dtype=int)
+        if n_steps <= nframes:
+            targets = np.linspace(0, nframes - 1, n_steps)
+            used = set()
+            chosen = []
+            idxs = np.arange(nframes)
+            for t in targets:
+                order = np.argsort(np.abs(idxs - t))
+                for idx in idxs[order]:
+                    if idx not in used:
+                        chosen.append(int(idx))
+                        used.add(int(idx))
+                        break
+            return np.array(sorted(chosen), dtype=int)
+        return np.linspace(0, nframes - 1, n_steps).round().astype(int)
+
+    def isochrone(self, n_steps: int = 6, background: bool = True,
+                  ax=None, smooth: int = 240, smoothness: float = 0.0):
+        """
+        Plot outer isochrone contours for n time steps over the trajectories.
+
+        n_steps: number of time samples across the trajectories.
+        background: draw wind background at the first time step.
+        """
+        if n_steps < 1:
+            raise ValueError("n_steps must be >= 1")
+
+        nframes = max(len(t.states) for t in self.trajectories)
+        frame_ids = self._sample_frames(nframes, n_steps)
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.figure
+
+        xmin, xmax, ymin, ymax = self._extent()
+
+        if background:
+            t0 = self.trajectories[0].states[frame_ids[0]].t
+            self._set_wind_time(t0)
+            im, _, _, _, _, _ = self._draw_background(ax, xmin, xmax, ymin, ymax)
+            fig.colorbar(im, ax=ax, label='Wind speed (m/s)')
+
+        ax.set_xlim(xmin / 1e3, xmax / 1e3)
+        ax.set_ylim(ymin / 1e3, ymax / 1e3)
+        ax.set_xlabel('x (km)')
+        ax.set_ylabel('y (km)')
+        ax.set_title('Isochrone contours')
+        ax.plot(0, 0, 'k*', ms=12, zorder=6, label='Start')
+
+        cmap = plt.cm.viridis
+        colors = cmap(np.linspace(0.1, 0.9, len(frame_ids)))
+        lines = []
+
+        for idx, frame in enumerate(frame_ids):
+            pts = []
+            for t in self.trajectories:
+                end = min(frame, len(t.states) - 1)
+                for k in range(end + 1):
+                    s = t.states[k]
+                    pts.append([s.x[0] / 1e3, s.x[1] / 1e3])
+            pts = np.array(pts, dtype=float)
+
+            uniq = np.unique(pts, axis=0)
+            if len(uniq) < 3:
+                hull_pts = uniq
+            else:
+                try:
+                    hull = ConvexHull(uniq, qhull_options="QJ")
+                    hull_pts = uniq[hull.vertices]
+                except QhullError:
+                    center = uniq.mean(axis=0)
+                    angles = np.arctan2(uniq[:, 1] - center[1], uniq[:, 0] - center[0])
+                    hull_pts = uniq[np.argsort(angles)]
+            hull_pts = np.vstack([hull_pts, hull_pts[0]])
+            smooth_pts = self._smooth_closed_curve(hull_pts, n=smooth, smooth=smoothness)
+
+            t_secs = self.trajectories[0].states[frame].t
+            label = f'{t_secs / 3600:.1f} h'
+            line, = ax.plot(smooth_pts[:, 0], smooth_pts[:, 1],
+                            color=colors[idx], lw=2.0, alpha=0.9, label=label)
+            lines.append(line)
+
+        ax.legend(loc='lower right', fontsize=9, title='Time')
+        return fig, ax, lines
